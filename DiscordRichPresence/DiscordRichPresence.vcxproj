@@ -127,7 +127,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;NDEBUG;DISCORDRICHPRESENCE_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>E:\Program Files (x86)\Winamp SDK\Winamp;C:\Users\Claire\source\repos\DiscordRichPresence\discord-rpc\win32-dynamic\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Program Files (x86)\Winamp SDK\Winamp;C:\Users\dionnys\Documents\Devs\wdrp\discord-rpc\win32-dynamic\include</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>

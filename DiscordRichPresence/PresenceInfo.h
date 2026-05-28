@@ -4,35 +4,35 @@ enum PlaybackState;
 
 class PresenceInfo
 {
-	DiscordRichPresence m_presence;
-	std::string m_stateBuffer;
-	std::string m_detailsBuffer;
+    std::string m_details;
+    std::string m_state;
+    int64_t     m_startTimestamp;
+    int64_t     m_endTimestamp;
+    HANDLE      m_hPipe;
+    int         m_nonce;
 
-	HMODULE m_hDiscordModule;
-
-	typedef void (DISCORD_EXPORT *Discord_InitializeFn)(const char*, DiscordEventHandlers*, int, const char*);
-	typedef void (DISCORD_EXPORT *Discord_ShutdownFn)(void);
-	typedef void (DISCORD_EXPORT *Discord_UpdatePresenceFn)(const DiscordRichPresence*);
-	typedef void (DISCORD_EXPORT *Discord_RunCallbacksFn)(void);
-
-	Discord_InitializeFn m_initializeFn;
-	Discord_ShutdownFn m_shutdownFn;
-	Discord_UpdatePresenceFn m_updatePresenceFn;
-	Discord_RunCallbacksFn m_runCallbacksFn;
+    bool ConnectPipe();
+    void DisconnectPipe();
+    bool SendFrame(uint32_t op, const std::string& payload);
+    bool DoHandshake();
+    void SendActivity();
 
 public:
-	PresenceInfo();
-	PlaybackState CurrentPlaybackState;
+    PresenceInfo();
+    ~PresenceInfo();
 
-	void InitializeDiscordRPC();
-	void ShutdownDiscordRPC();
+    PlaybackState CurrentPlaybackState;
 
-	bool HasDiscordModuleLoaded() const;
+    void InitializeDiscordRPC();
+    void ShutdownDiscordRPC();
 
-	void SetStateText(char const* str);
-	void SetDetails(char const* str);
-	void ClearDetails();
-	void SetStartTimestamp(__int64 timestamp);
+    bool HasDiscordModuleLoaded() const;
 
-	void PostToDiscord();
+    void SetStateText(char const* str);
+    void SetDetails(char const* str);
+    void ClearDetails();
+    void SetStartTimestamp(__int64 timestamp);
+    void SetEndTimestamp(__int64 timestamp);
+
+    void PostToDiscord();
 };

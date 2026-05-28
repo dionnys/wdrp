@@ -2,115 +2,213 @@
 #include "PresenceInfo.h"
 #include "DiscordRichPresence.h"
 #include "SettingsFile.h"
+#include <string>
+#include <sstream>
+
+static std::string EscapeJson(const std::string& s)
+{
+    std::string out;
+    out.reserve(s.size());
+    for (unsigned char c : s)
+    {
+        switch (c)
+        {
+        case '"':  out += "\\\""; break;
+        case '\\': out += "\\\\"; break;
+        case '\b': out += "\\b";  break;
+        case '\f': out += "\\f";  break;
+        case '\n': out += "\\n";  break;
+        case '\r': out += "\\r";  break;
+        case '\t': out += "\\t";  break;
+        default:
+            if (c < 0x20) { }
+            else out += (char)c;
+        }
+    }
+    return out;
+}
 
 PresenceInfo::PresenceInfo()
-	: m_initializeFn{}
-	, m_shutdownFn{}
-	, m_updatePresenceFn{}
-	, m_runCallbacksFn{}
-	, m_hDiscordModule{}
+    : m_startTimestamp(0)
+    , m_endTimestamp(0)
+    , m_hPipe(INVALID_HANDLE_VALUE)
+    , m_nonce(1)
+    , CurrentPlaybackState(Stopped)
 {
-	memset(&m_presence, 0, sizeof(m_presence));
-	m_presence.largeImageKey = "winamp-logo";
-	m_presence.instance = 1;
-	CurrentPlaybackState = Stopped;
 }
 
-void PresenceInfo::SetStateText(char const* str)
+PresenceInfo::~PresenceInfo()
 {
-	m_stateBuffer = str;
-	m_presence.state = m_stateBuffer.c_str();
+    DisconnectPipe();
 }
 
-void PresenceInfo::SetDetails(char const* str)
+bool PresenceInfo::ConnectPipe()
 {
-	m_detailsBuffer = str;
-	m_presence.details = m_detailsBuffer.c_str();
+    if (m_hPipe != INVALID_HANDLE_VALUE)
+        return true;
+
+    for (int i = 0; i < 10; i++)
+    {
+        std::wstring name = L"\\\\.\\pipe\\discord-ipc-" + std::to_wstring(i);
+        HANDLE h = CreateFileW(name.c_str(),
+            GENERIC_READ | GENERIC_WRITE,
+            0, nullptr, OPEN_EXISTING, 0, nullptr);
+
+        if (h != INVALID_HANDLE_VALUE)
+        {
+            m_hPipe = h;
+            return true;
+        }
+    }
+    return false;
 }
 
-void PresenceInfo::ClearDetails()
+void PresenceInfo::DisconnectPipe()
 {
-	m_detailsBuffer.clear();
-	m_presence.details = nullptr;
+    if (m_hPipe != INVALID_HANDLE_VALUE)
+    {
+        CloseHandle(m_hPipe);
+        m_hPipe = INVALID_HANDLE_VALUE;
+    }
 }
 
-void PresenceInfo::SetStartTimestamp(__int64 timestamp)
+bool PresenceInfo::SendFrame(uint32_t op, const std::string& payload)
 {
-	m_presence.startTimestamp = timestamp;
+    if (m_hPipe == INVALID_HANDLE_VALUE)
+        return false;
+
+    uint32_t len = (uint32_t)payload.size();
+    DWORD written = 0;
+
+    if (!WriteFile(m_hPipe, &op,  4, &written, nullptr)) { DisconnectPipe(); return false; }
+    if (!WriteFile(m_hPipe, &len, 4, &written, nullptr)) { DisconnectPipe(); return false; }
+    if (!WriteFile(m_hPipe, payload.c_str(), len, &written, nullptr)) { DisconnectPipe(); return false; }
+    return true;
 }
+
+static bool ReadFrame(HANDLE hPipe, uint32_t& op, std::string& payload)
+{
+    uint32_t recvOp  = 0;
+    uint32_t recvLen = 0;
+    DWORD bytesRead  = 0;
+
+    if (!ReadFile(hPipe, &recvOp,  4, &bytesRead, nullptr)) return false;
+    if (!ReadFile(hPipe, &recvLen, 4, &bytesRead, nullptr)) return false;
+    if (recvLen > 65536) return false;
+
+    payload.resize(recvLen);
+    if (recvLen > 0)
+        if (!ReadFile(hPipe, &payload[0], recvLen, &bytesRead, nullptr)) return false;
+
+    op = recvOp;
+    return true;
+}
+
+bool PresenceInfo::DoHandshake()
+{
+    std::string hs = R"({"v":1,"client_id":")" +
+        g_pluginSettings.ApplicationID + R"("})";
+
+    if (!SendFrame(0, hs))
+        return false;
+
+    uint32_t op = 0;
+    std::string resp;
+    ReadFrame(m_hPipe, op, resp);
+    return true;
+}
+
+void PresenceInfo::SendActivity()
+{
+    if (m_hPipe == INVALID_HANDLE_VALUE)
+    {
+        if (!ConnectPipe())  return;
+        if (!DoHandshake())  return;
+    }
+
+    std::string activity;
+    activity += R"("type":2)";
+
+    if (!m_details.empty())
+        activity += R"(,"details":")" + EscapeJson(m_details) + "\"";
+
+    if (!m_state.empty())
+        activity += R"(,"state":")" + EscapeJson(m_state) + "\"";
+
+    // Timestamps: start + end dan la barra de progreso
+    if (m_startTimestamp > 0 || m_endTimestamp > 0)
+    {
+        activity += R"(,"timestamps":{)";
+        if (m_startTimestamp > 0)
+            activity += R"("start":)" + std::to_string(m_startTimestamp);
+        if (m_endTimestamp > 0)
+        {
+            if (m_startTimestamp > 0) activity += ",";
+            activity += R"("end":)" + std::to_string(m_endTimestamp);
+        }
+        activity += "}";
+    }
+
+    activity += R"(,"assets":{"large_image":"winamp-logo","large_text":"Winamp"})";
+
+    std::string payload =
+        R"({"cmd":"SET_ACTIVITY","args":{"pid":)" +
+        std::to_string((int)GetCurrentProcessId()) +
+        R"(,"activity":{)" + activity + R"(}},"nonce":")" +
+        std::to_string(m_nonce++) + R"("})";
+
+    if (!SendFrame(1, payload))
+        DisconnectPipe();
+    else
+    {
+        uint32_t op = 0;
+        std::string resp;
+        ReadFrame(m_hPipe, op, resp);
+    }
+}
+
+void PresenceInfo::SetStateText(char const* str)  { m_state   = str ? str : ""; }
+void PresenceInfo::SetDetails(char const* str)    { m_details = str ? str : ""; }
+void PresenceInfo::ClearDetails()                 { m_details.clear(); }
+void PresenceInfo::SetStartTimestamp(__int64 t)   { m_startTimestamp = t; }
+void PresenceInfo::SetEndTimestamp(__int64 t)     { m_endTimestamp   = t; }
 
 void PresenceInfo::PostToDiscord()
 {
-	m_updatePresenceFn(&m_presence);
-	m_runCallbacksFn();
+    SendActivity();
 }
 
 bool PresenceInfo::HasDiscordModuleLoaded() const
 {
-	return m_hDiscordModule;
-}
+    if (m_hPipe != INVALID_HANDLE_VALUE)
+        return true;
 
-static void handleDiscordReady(const DiscordUser* connectedUser)
-{
-}
-
-static void handleDiscordError(int errcode, const char* message)
-{
-}
-
-static void handleDiscordDisconnected(int errcode, const char* message)
-{
-}
-
-static void handleDiscordJoinGame(const char* secret)
-{
-}
-
-static void handleDiscordSpectateGame(const char* secret)
-{
-}
-
-static void handleDiscordJoinRequest(const DiscordUser* request)
-{
+    for (int i = 0; i < 10; i++)
+    {
+        std::wstring name = L"\\\\.\\pipe\\discord-ipc-" + std::to_wstring(i);
+        HANDLE h = CreateFileW(name.c_str(),
+            GENERIC_READ | GENERIC_WRITE,
+            0, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (h != INVALID_HANDLE_VALUE)
+        {
+            CloseHandle(h);
+            return true;
+        }
+    }
+    return false;
 }
 
 void PresenceInfo::InitializeDiscordRPC()
 {
-	if (g_pluginSettings.ApplicationID == "0")
-		return;
+    if (g_pluginSettings.ApplicationID == "0")
+        return;
 
-	if (!m_hDiscordModule)
-	{
-		m_hDiscordModule = LoadLibrary(L"Plugins\\DiscordRichPresence\\discord-rpc.dll");
-		if (!m_hDiscordModule)
-			return;
-
-		m_initializeFn = (Discord_InitializeFn)GetProcAddress(m_hDiscordModule, "Discord_Initialize");
-		m_shutdownFn = (Discord_ShutdownFn)GetProcAddress(m_hDiscordModule, "Discord_Shutdown");
-		m_updatePresenceFn = (Discord_UpdatePresenceFn)GetProcAddress(m_hDiscordModule, "Discord_UpdatePresence");
-		m_runCallbacksFn = (Discord_RunCallbacksFn)GetProcAddress(m_hDiscordModule, "Discord_RunCallbacks");
-	}
-
-	DiscordEventHandlers handlers;
-	memset(&handlers, 0, sizeof(handlers));
-	handlers.ready = handleDiscordReady;
-	handlers.errored = handleDiscordError;
-	handlers.disconnected = handleDiscordDisconnected;
-	handlers.joinGame = handleDiscordJoinGame;
-	handlers.spectateGame = handleDiscordSpectateGame;
-	handlers.joinRequest = handleDiscordJoinRequest;
-
-	std::string applicationID = g_pluginSettings.ApplicationID.c_str();
-	int autoRegister = 1;
-	const char* noSteamID = nullptr;
-	m_initializeFn(applicationID.c_str(), &handlers, autoRegister, noSteamID);
-	m_runCallbacksFn();
+    DisconnectPipe();
+    if (!ConnectPipe()) return;
+    DoHandshake();
 }
 
 void PresenceInfo::ShutdownDiscordRPC()
 {
-	if (m_hDiscordModule)
-	{
-		m_shutdownFn();
-	}
+    DisconnectPipe();
 }
