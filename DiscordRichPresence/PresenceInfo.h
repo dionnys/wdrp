@@ -1,6 +1,6 @@
 #pragma once
 
-enum PlaybackState;
+enum class PlaybackState;
 
 class PresenceInfo
 {

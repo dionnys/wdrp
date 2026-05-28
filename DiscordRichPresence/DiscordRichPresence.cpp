@@ -83,7 +83,7 @@ void ReportIdleStatus()
     if (!g_presenceInfo.HasDiscordModuleLoaded()) return;
     if (g_pluginSettings.ApplicationID == "0") return;
 
-    g_presenceInfo.CurrentPlaybackState = Stopped;
+    g_presenceInfo.CurrentPlaybackState = PlaybackState::Stopped;
     g_presenceInfo.SetStartTimestamp(0);
     g_presenceInfo.SetEndTimestamp(0);
     g_presenceInfo.SetStateText("Idle");
@@ -121,7 +121,7 @@ void ReportCurrentSongStatus(PlaybackState playbackState)
     int currentPosSec = SendMessage(g_plugin.hwndParent, WM_WA_IPC, 0, IPC_GETOUTPUTTIME) / 1000;
     int totalLength   = SendMessage(g_plugin.hwndParent, WM_WA_IPC, 1, IPC_GETOUTPUTTIME);
 
-    if (playbackState == Playing && totalLength > 0)
+    if (playbackState == PlaybackState::Playing && totalLength > 0)
     {
         long long now = NowSeconds();
         g_presenceInfo.SetStartTimestamp(now - currentPosSec);
@@ -156,7 +156,7 @@ void ReportCurrentSongStatus(PlaybackState playbackState)
     }
 
     std::string stateText = artist.empty() ? "Unknown Artist" : artist;
-    if (playbackState == Paused) stateText += " (Paused)";
+    if (playbackState == PlaybackState::Paused) stateText += " (Paused)";
     g_presenceInfo.SetStateText(stateText.c_str());
 
     if (g_pluginSettings.DisplayTitleInStatus)
@@ -171,16 +171,16 @@ void UpdateRichPresenceDetails()
 {
     LONG isPlayingResult = SendMessage(g_plugin.hwndParent, WM_WA_IPC, 0, IPC_ISPLAYING);
 
-    if (isPlayingResult == Playing)
+    if (isPlayingResult == static_cast<LONG>(PlaybackState::Playing))
     {
         if (g_pluginSettings.ShowElapsedTime) g_timer.Set();
         else g_timer.Stop();
-        ReportCurrentSongStatus(Playing);
+        ReportCurrentSongStatus(PlaybackState::Playing);
     }
-    else if (isPlayingResult == Paused)
+    else if (isPlayingResult == static_cast<LONG>(PlaybackState::Paused))
     {
         g_timer.Stop();
-        ReportCurrentSongStatus(Paused);
+        ReportCurrentSongStatus(PlaybackState::Paused);
     }
     else
     {

@@ -14,6 +14,7 @@ public:
 		, m_isTimerAlive(false)
 		, m_interval(2000)
 		, m_winampClientWindow{}
+		, m_timerProc(nullptr)
 	{
 	}
 

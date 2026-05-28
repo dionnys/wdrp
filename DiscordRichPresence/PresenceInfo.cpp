@@ -33,7 +33,7 @@ PresenceInfo::PresenceInfo()
     , m_endTimestamp(0)
     , m_hPipe(INVALID_HANDLE_VALUE)
     , m_nonce(1)
-    , CurrentPlaybackState(Stopped)
+    , CurrentPlaybackState(PlaybackState::Stopped)
 {
 }
 
@@ -86,6 +86,31 @@ bool PresenceInfo::SendFrame(uint32_t op, const std::string& payload)
     return true;
 }
 
+static std::string UrlEncode(const std::string& str)
+{
+    std::string encoded;
+    encoded.reserve(str.size() * 2);
+
+    for (unsigned char c : str)
+    {
+        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~')
+        {
+            encoded += c;
+        }
+        else if (c == ' ')
+        {
+            encoded += '+';
+        }
+        else
+        {
+            encoded += '%';
+            encoded += "0123456789ABCDEF"[c >> 4];
+            encoded += "0123456789ABCDEF"[c & 15];
+        }
+    }
+    return encoded;
+}
+
 static bool ReadFrame(HANDLE hPipe, uint32_t& op, std::string& payload)
 {
     uint32_t recvOp  = 0;
@@ -135,7 +160,7 @@ void PresenceInfo::SendActivity()
     if (!m_state.empty())
         activity += R"(,"state":")" + EscapeJson(m_state) + "\"";
 
-    // Timestamps: start + end dan la barra de progreso
+    // Timestamps: start + end
     if (m_startTimestamp > 0 || m_endTimestamp > 0)
     {
         activity += R"(,"timestamps":{)";
@@ -150,6 +175,28 @@ void PresenceInfo::SendActivity()
     }
 
     activity += R"(,"assets":{"large_image":"winamp-logo","large_text":"Winamp"})";
+
+    // ==================== BOTÓN LAST.FM (ENLACE DIRECTO) ====================
+    // Nota: Ajusta m_state y m_details según cuál sea el artista y cuál la canción en tu plugin.
+    if (!m_state.empty() && !m_details.empty())
+    {
+        // Formato estándar de Last.fm: https://www.last.fm/music/Artista/_/Cancion
+        std::string lastfm_url = "https://www.last.fm/music/" + UrlEncode(m_state) + "/_/" + UrlEncode(m_details);
+
+        activity += R"(,"buttons":[)";
+        activity += R"({"label":"Escucha en Last.fm","url":")" + EscapeJson(lastfm_url) + R"("})";
+        activity += R"(])";
+    }
+    else if (!m_state.empty() || !m_details.empty()) // Si solo tenemos uno de los dos datos, hacemos fallback a búsqueda
+    {
+        std::string searchQuery = !m_details.empty() ? m_details : m_state;
+        std::string lastfm_url = "https://www.last.fm/search?q=" + UrlEncode(searchQuery);
+
+        activity += R"(,"buttons":[)";
+        activity += R"({"label":"Buscar en Last.fm","url":")" + EscapeJson(lastfm_url) + R"("})";
+        activity += R"(])";
+    }
+    // =======================================================================
 
     std::string payload =
         R"({"cmd":"SET_ACTIVITY","args":{"pid":)" +
@@ -166,6 +213,7 @@ void PresenceInfo::SendActivity()
         ReadFrame(m_hPipe, op, resp);
     }
 }
+
 
 void PresenceInfo::SetStateText(char const* str)  { m_state   = str ? str : ""; }
 void PresenceInfo::SetDetails(char const* str)    { m_details = str ? str : ""; }
